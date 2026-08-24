@@ -1,13 +1,14 @@
 package com.bancoxyz.batch.writers;
 
-import com.bancoxyz.batch.model.CuentaInteres;
-import org.springframework.batch.infrastructure.item.database.JdbcBatchItemWriter;
-import org.springframework.batch.infrastructure.item.database.BeanPropertyItemSqlParameterSourceProvider;
-import org.springframework.batch.infrastructure.item.database.builder.JdbcBatchItemWriterBuilder;
-
 import javax.sql.DataSource;
 
-public class IntereesMensualesItemWriter {
+import org.springframework.batch.infrastructure.item.database.BeanPropertyItemSqlParameterSourceProvider;
+import org.springframework.batch.infrastructure.item.database.JdbcBatchItemWriter;
+import org.springframework.batch.infrastructure.item.database.builder.JdbcBatchItemWriterBuilder;
+
+import com.bancoxyz.batch.model.CuentaInteres;
+
+public class InteresesMensualesItemWriter {
 
     public static JdbcBatchItemWriter<CuentaInteres> writer(DataSource dataSource) {
         return new JdbcBatchItemWriterBuilder<CuentaInteres>()
