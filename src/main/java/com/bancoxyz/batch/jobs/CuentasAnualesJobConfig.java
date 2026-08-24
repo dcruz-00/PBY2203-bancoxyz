@@ -13,9 +13,12 @@ import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.batch.infrastructure.item.file.FlatFileItemReader;
 import org.springframework.batch.infrastructure.item.file.FlatFileParseException;
+import org.springframework.batch.infrastructure.item.ItemStreamReader;
 import org.springframework.batch.infrastructure.item.database.JdbcBatchItemWriter;
+import org.springframework.batch.infrastructure.item.support.builder.SynchronizedItemStreamReaderBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
 
@@ -34,9 +37,12 @@ public class CuentasAnualesJobConfig {
     @Bean
     public Step cuentasAnualesStep(JobRepository jobRepository,
             PlatformTransactionManager transactionManager,
-            DataSource dataSource) {
+            DataSource dataSource,
+            TaskExecutor batchTaskExecutor) {
 
-        FlatFileItemReader<CuentaAnual> reader = CuentasAnualesItemReader.reader();
+        ItemStreamReader<CuentaAnual> reader = new SynchronizedItemStreamReaderBuilder<CuentaAnual>()
+        .delegate(CuentasAnualesItemReader.reader())
+        .build();
         JdbcBatchItemWriter<CuentaAnual> writer = CuentasAnualesItemWriter.writer(dataSource);
 
         return new StepBuilder("cuentasAnualesStep", jobRepository)
@@ -51,6 +57,7 @@ public class CuentasAnualesJobConfig {
                 .listener(new RegistroDescartadoListener())
                 .retry(TransientDataAccessException.class)
                 .retryLimit(3)
+                .taskExecutor(batchTaskExecutor)
                 .build();
     }
 }

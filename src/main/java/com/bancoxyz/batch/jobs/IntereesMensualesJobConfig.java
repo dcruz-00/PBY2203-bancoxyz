@@ -13,9 +13,12 @@ import org.springframework.batch.core.step.Step;
 import org.springframework.batch.core.step.builder.StepBuilder;
 import org.springframework.batch.infrastructure.item.file.FlatFileItemReader;
 import org.springframework.batch.infrastructure.item.file.FlatFileParseException;
+import org.springframework.batch.infrastructure.item.ItemStreamReader;
 import org.springframework.batch.infrastructure.item.database.JdbcBatchItemWriter;
+import org.springframework.batch.infrastructure.item.support.builder.SynchronizedItemStreamReaderBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
 
@@ -34,9 +37,12 @@ public class IntereesMensualesJobConfig {
     @Bean
     public Step intereesMensualesStep(JobRepository jobRepository,
             PlatformTransactionManager transactionManager,
-            DataSource dataSource) {
+            DataSource dataSource,
+            TaskExecutor batchTaskExecutor) {
 
-        FlatFileItemReader<CuentaInteres> reader = IntereesMensualesItemReader.reader();
+        ItemStreamReader<CuentaInteres> reader = new SynchronizedItemStreamReaderBuilder<CuentaInteres>()
+        .delegate(IntereesMensualesItemReader.reader())
+        .build();
         JdbcBatchItemWriter<CuentaInteres> writer = IntereesMensualesItemWriter.writer(dataSource);
 
         return new StepBuilder("intereesMensualesStep", jobRepository)
@@ -51,6 +57,7 @@ public class IntereesMensualesJobConfig {
                 .listener(new RegistroDescartadoListener())
                 .retry(TransientDataAccessException.class)
                 .retryLimit(3)
+                .taskExecutor(batchTaskExecutor)
                 .build();
     }
 }
