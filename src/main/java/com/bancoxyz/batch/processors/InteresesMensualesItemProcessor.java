@@ -1,21 +1,21 @@
 package com.bancoxyz.batch.processors;
 
-import com.bancoxyz.batch.exception.DatoInvalidoException;
-import com.bancoxyz.batch.model.CuentaInteres;
+import java.time.LocalDate;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
 import org.springframework.batch.infrastructure.item.ItemProcessor;
 
-import java.time.LocalDate;
-import java.util.HashSet;
-import java.util.Set;
+import com.bancoxyz.batch.exception.DatoInvalidoException;
+import com.bancoxyz.batch.model.CuentaInteres;
 
-public class IntereesMensualesItemProcessor implements ItemProcessor<CuentaInteres, CuentaInteres> {
+public class InteresesMensualesItemProcessor implements ItemProcessor<CuentaInteres, CuentaInteres> {
     private static final double TASA_AHORRO = 0.005;
     private static final double TASA_PRESTAMO = 0.015;
     private static final int EDAD_MINIMA = 0;
     private static final int EDAD_MAXIMA = 120;
 
-    // Guarda una "firma" de nombre+saldo+edad+tipo ya vistos, para detectar duplicados
-    private final Set<String> vistos = new HashSet<>();
+    private final Set<String> vistos = ConcurrentHashMap.newKeySet();
 
     @Override
     public CuentaInteres process(CuentaInteres item) {
@@ -46,7 +46,8 @@ public class IntereesMensualesItemProcessor implements ItemProcessor<CuentaInter
                         "Cuenta id=" + item.getCuentaId() + ": tipo no soportado (" + item.getTipo() + ")");
         }
 
-        // Regla: duplicado por nombre+saldo+edad+tipo (mismos datos, distinto cuenta_id) -> se omite
+        // Regla: duplicado por nombre+saldo+edad+tipo (mismos datos, distinto
+        // cuenta_id) -> se omite
         String firma = item.getNombre() + "|" + item.getSaldo() + "|" + item.getEdad() + "|" + item.getTipo();
         if (vistos.contains(firma)) {
             return null;

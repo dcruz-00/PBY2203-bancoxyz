@@ -1,17 +1,18 @@
 package com.bancoxyz.batch.processors;
 
-import com.bancoxyz.batch.exception.DatoInvalidoException;
-import com.bancoxyz.batch.model.Transaccion;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
 import org.springframework.batch.infrastructure.item.ItemProcessor;
 
-import java.util.HashSet;
-import java.util.Set;
+import com.bancoxyz.batch.exception.DatoInvalidoException;
+import com.bancoxyz.batch.model.Transaccion;
 
 public class TransaccionesItemProcessor implements ItemProcessor<Transaccion, Transaccion> {
 
     private static final Set<String> TIPOS_VALIDOS = Set.of("debito", "credito");
 
-    private final Set<String> vistos = new HashSet<>();
+    private final Set<String> vistos = ConcurrentHashMap.newKeySet();
 
     @Override
     public Transaccion process(Transaccion item) {
