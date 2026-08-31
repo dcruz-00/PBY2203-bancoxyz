@@ -53,6 +53,7 @@ public class CuentasAnualesJobConfig {
                 .faultTolerant()
                 .skip(DatoInvalidoException.class)
                 .skip(FlatFileParseException.class)
+                .noRollback(DatoInvalidoException.class)
                 .skipLimit(100)
                 .listener(new RegistroDescartadoListener())
                 .retry(TransientDataAccessException.class)
