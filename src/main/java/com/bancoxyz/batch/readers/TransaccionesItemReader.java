@@ -1,11 +1,12 @@
 package com.bancoxyz.batch.readers;
 
-import com.bancoxyz.batch.model.Transaccion;
+import java.time.LocalDate;
+
 import org.springframework.batch.infrastructure.item.file.FlatFileItemReader;
 import org.springframework.batch.infrastructure.item.file.builder.FlatFileItemReaderBuilder;
 import org.springframework.core.io.ClassPathResource;
 
-import java.time.LocalDate;
+import com.bancoxyz.batch.model.Transaccion;
 
 public class TransaccionesItemReader {
 
@@ -25,5 +26,13 @@ public class TransaccionesItemReader {
                     return transaccion;
                 })
                 .build();
+    }
+
+    public static FlatFileItemReader<Transaccion> reader(int fromItem, int toItem) {
+        FlatFileItemReader<Transaccion> reader = reader();
+        reader.setName("transaccionesItemReader-" + fromItem + "-" + toItem);
+        reader.setCurrentItemCount(fromItem);
+        reader.setMaxItemCount(toItem);
+        return reader;
     }
 }
