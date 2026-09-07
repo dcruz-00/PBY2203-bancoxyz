@@ -12,6 +12,8 @@ Es un sistema de procesamiento batch para el BancoXYZ, desarrollado con **Spring
 - [Escalado y procesamiento paralelo](#escalado-y-procesamiento-paralelo)
 - [Tolerancia a fallos](#tolerancia-a-fallos)
 - [Cómo ejecutar los Jobs](#cómo-ejecutar-los-jobs)
+- [Arquitectura BFF (Backend for Frontend)](#arquitectura-bff-backend-for-frontend)
+- [Cómo ejecutar los BFF](#cómo-ejecutar-los-bff)
 - [Integrantes](#integrantes)
 
 ## Tecnologías
@@ -99,19 +101,17 @@ Los archivos CSV que alimentan cada Job deben ubicarse en `src/main/resources/da
 - `data/cuentas_anuales.csv`
 
 ## Estructura del proyecto
-
-```
 src/main/java/com/bancoxyz/batch/
-├── config/      # Configuración de Spring Batch (JobRepository, TaskExecutor)
-├── exception/   # Excepciones de negocio (validación de datos)
-├── jobs/        # Configuración de cada Job y sus Steps
-├── listeners/   # Listeners de Step (registro de ítems descartados)
-├── model/       # Clases de dominio usadas por los Jobs
-├── partition/   # Particionadores para escalado de Jobs
-├── processors/  # Lógica de negocio aplicada a cada ítem
-├── readers/     # Lectores de archivos de entrada (CSV)
-└── writers/     # Escritores hacia la base de datos
-```
+├── config/ # Configuración de Spring Batch (JobRepository, TaskExecutor)
+├── exception/ # Excepciones de negocio (validación de datos)
+├── jobs/ # Configuración de cada Job y sus Steps
+├── listeners/ # Listeners de Step (registro de ítems descartados)
+├── model/ # Clases de dominio usadas por los Jobs
+├── partition/ # Particionadores para escalado de Jobs
+├── processors/ # Lógica de negocio aplicada a cada ítem
+├── readers/ # Lectores de archivos de entrada (CSV)
+└── writers/ # Escritores hacia la base de datos
+
 
 ## Jobs
 
@@ -177,7 +177,88 @@ Para `transaccionesJob`, el tamaño de partición puede ajustarse con `batch.tra
 ./mvnw spring-boot:run "-Dspring-boot.run.arguments=--spring.batch.job.name=transaccionesJob --batch.transacciones.grid-size=3 run.id=<valor único>"
 ```
 
-## Integrantes del Grupo 11 (S1 y S2)
+## Arquitectura BFF (Backend for Frontend)
 
-- **Diego Cruz** — Reporte de Transacciones Diarias, Generación de Estados de Cuenta Anuales
-- **Emilia Acevedo** — Cálculo de Intereses Mensuales
+A partir de esta entrega, el proyecto crece de una sola aplicación Spring Boot a un **repositorio multi-módulo de Maven**, donde cada servicio es una aplicación independiente con su propio `main()`, su propio puerto y su propio ciclo de vida:
+
+PBY2203-bancoxyz/
+├── pom.xml # aggregator (packaging=pom, declara los módulos)
+├── batch-jobs/ # los 3 Jobs de Spring Batch (procesamiento offline)
+├── core-api/ # fuente de verdad: expone los datos vía REST (puerto 8080)
+├── bff-web/ # BFF para clientes Web (puerto 8081)
+├── bff-movil/ # BFF para app móvil (puerto 8082)
+└── bff-cajeros/ # BFF para cajeros automáticos (puerto 8083)
+
+
+### Decisión de diseño: microservicios separados en vez de un solo Spring Boot
+
+Antes de repartir el trabajo, evaluamos dos alternativas:
+
+1. **Un solo proyecto Spring Boot** con 3 sets de controllers (uno por canal: Web, Móvil, Cajeros).
+2. **Módulos/microservicios separados**, cada uno como una aplicación Spring Boot independiente.
+
+Elegimos la **opción 2** por estas razones:
+
+- **Trabajo en paralelo sin conflictos:** al ser aplicaciones separadas (carpetas, `pom.xml` y procesos independientes), cada integrante pudo construir su parte sin tocar los archivos del otro.
+- **Aislamiento real entre canales:** cada BFF tiene su propia autenticación, su propio puerto y su propio ciclo de despliegue. Un cambio o una caída en `bff-movil` no afecta a `bff-web` ni a `bff-cajeros`, algo que en un único proyecto con 3 sets de controllers sería más difícil de garantizar (comparten el mismo proceso y el mismo classpath).
+- **Reglas de seguridad muy distintas por canal:** Cajeros necesita un PIN adicional por operación (`X-Pin`), Móvil y Web usan credenciales propias — mantenerlas en `SecurityConfig` separados por módulo es más claro que condicionar una sola configuración de seguridad según la ruta.
+- **Se ajusta mejor al patrón BFF real:** el patrón Backend for Frontend nace justamente para que cada canal tenga su propio backend "a la medida", desplegable y escalable de forma independiente — un monolito con 3 sets de controllers es más bien un backend único con vistas distintas, no BFF real.
+
+La contrapartida asumida: hay que levantar 4 procesos en paralelo para probar el sistema completo (`core-api` + los 3 BFF), en vez de uno solo. Se consideró un costo aceptable frente a los beneficios de aislamiento y trabajo paralelo.
+
+### `core-api`
+
+Expone los datos ya cargados por `batch-jobs` en Postgres:
+
+| Método | Endpoint | Descripción |
+|---|---|---|
+| GET | `/api/cuentas` | Lista todas las cuentas con su interés calculado |
+| GET | `/api/cuentas/{id}` | Detalle de una cuenta |
+| GET | `/api/transacciones` | Lista todas las transacciones válidas |
+| PATCH | `/api/cuentas/{id}/retiro` | Descuenta un monto del saldo (usado por Cajeros); responde `404` si la cuenta no existe y `409` si el saldo es insuficiente |
+
+`core-api` **no es de acceso público**: un filtro (`InternalApiKeyFilter`) exige el header `X-Internal-Key` en cada request, con un valor compartido (`internal.api.key`) que solo conocen los 3 BFF. Esto evita que un cliente externo se salte los BFF y golpee la fuente de datos directamente.
+
+### `bff-web` — canal Web (puerto 8081)
+
+Expone datos completos (pensado para dashboards): `GET /web/cuentas`, `GET /web/cuentas/{id}`, `GET /web/transacciones`. Autenticación básica propia (`web-client` / `web-secret`, rol `WEB`).
+
+### `bff-movil` — canal Móvil (puerto 8082)
+
+Expone una versión liviana de la cuenta (solo `cuentaId`, `saldo`, `tipo` — sin los campos que la app no necesita) vía `GET /movil/cuentas/{id}`. Autenticación básica propia (`movil-client` / `movil-secret`, rol `MOVIL`).
+
+### `bff-cajeros` — canal Cajeros Automáticos (puerto 8083)
+
+Pensado para operaciones críticas: `GET /cajero/cuentas/{id}/saldo` y `PATCH /cajero/cuentas/{id}/retiro`. Además de la autenticación básica propia (`cajero-client` / `cajero-secret`, rol `CAJERO`), exige un PIN por operación mediante el header `X-Pin` (validado por `PinFilter` contra `atm.pin.esperado`) — una capa extra de seguridad acorde a que un cajero es un canal físico de alto riesgo.
+
+## Cómo ejecutar los BFF
+
+Se necesitan **4 terminales** en paralelo, una por servicio:
+
+```bash
+cd core-api    && ../mvnw spring-boot:run   # puerto 8080
+cd bff-web     && ../mvnw spring-boot:run   # puerto 8081
+cd bff-movil   && ../mvnw spring-boot:run   # puerto 8082
+cd bff-cajeros && ../mvnw spring-boot:run   # puerto 8083
+```
+
+Ejemplos de prueba (con `curl.exe` en Windows):
+
+```bash
+# core-api directo (requiere X-Internal-Key)
+curl.exe -H "X-Internal-Key: clave-interna-bancoxyz-2026" http://localhost:8080/api/cuentas
+
+# bff-web
+curl.exe -u web-client:web-secret http://localhost:8081/web/cuentas
+
+# bff-movil
+curl.exe -u movil-client:movil-secret http://localhost:8082/movil/cuentas/101
+
+# bff-cajeros (requiere ademas el PIN)
+curl.exe -u cajero-client:cajero-secret -H "X-Pin: 1234" http://localhost:8083/cajero/cuentas/101/saldo
+```
+
+## Integrantes del Grupo 11 (S1, S2 y S4)
+
+- **Diego Cruz** — Reporte de Transacciones Diarias, Generación de Estados de Cuenta Anuales, BFF Móvil, BFF Cajeros
+- **Emilia Acevedo** — Cálculo de Intereses Mensuales, `core-api`, BFF Web
