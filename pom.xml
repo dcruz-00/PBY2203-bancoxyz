@@ -13,5 +13,6 @@
         <module>core-api</module>
         <module>bff-web</module>
         <module>bff-movil</module>
+        <module>bff-cajeros</module>
     </modules>
 </project>
