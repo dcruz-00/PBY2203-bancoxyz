@@ -12,5 +12,6 @@
         <module>batch-jobs</module>
         <module>core-api</module>
         <module>bff-web</module>
+        <module>bff-movil</module>
     </modules>
 </project>
