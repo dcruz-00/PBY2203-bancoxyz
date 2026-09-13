@@ -242,21 +242,62 @@ cd bff-movil   && ../mvnw spring-boot:run   # puerto 8082
 cd bff-cajeros && ../mvnw spring-boot:run   # puerto 8083
 ```
 
-Ejemplos de prueba (con `curl.exe` en Windows):
+## Seguridad de transporte: HTTPS
+
+A partir de esta entrega, los 4 servicios (`core-api`, `bff-web`, `bff-movil`, `bff-cajeros`) exponen sus endpoints únicamente por HTTPS, usando un certificado autofirmado compartido (`bancoxyz-keystore.p12`, alias `bancoxyz`, contraseña `bancoxyz2026`).
+
+### Generación del certificado
+
+El keystore ya está incluido en el repositorio (copiado en `src/main/resources/` de cada módulo). Si se necesitara regenerar:
+
+```bash
+keytool -genkeypair -alias bancoxyz -keyalg RSA -keysize 2048 -storetype PKCS12 \
+  -keystore bancoxyz-keystore.p12 -validity 3650 \
+  -dname "CN=localhost, OU=BancoXYZ, O=BancoXYZ, L=Santiago, ST=RM, C=CL" \
+  -storepass bancoxyz2026
+```
+
+### Configuración por módulo
+
+Cada `application.properties` incluye:
+
+```properties
+server.ssl.enabled=true
+server.ssl.key-store=classpath:bancoxyz-keystore.p12
+server.ssl.key-store-password=bancoxyz2026
+server.ssl.key-store-type=PKCS12
+server.ssl.key-alias=bancoxyz
+```
+
+### Comunicación interna BFF → core-api
+
+Como el certificado es autofirmado, el cliente HTTP por defecto de Java (usado por `RestClient`) rechaza la conexión por no reconocer una CA. Para resolverlo sin desactivar la validación por completo, cada BFF construye su `RestClient` sobre Apache HttpClient 5, configurado para confiar explícitamente en el mismo `bancoxyz-keystore.p12` como *trust store* (ver `RestClientConfig` en cada módulo).
+
+### Pruebas con `curl`
+
+Al ser un certificado autofirmado (no emitido por una CA pública), los clientes deben ignorar la validación de confianza explícitamente:
 
 ```bash
 # core-api directo (requiere X-Internal-Key)
-curl.exe -H "X-Internal-Key: clave-interna-bancoxyz-2026" http://localhost:8080/api/cuentas
+curl -k -H "X-Internal-Key: clave-interna-bancoxyz-2026" https://localhost:8080/api/cuentas
 
 # bff-web
-curl.exe -u web-client:web-secret http://localhost:8081/web/cuentas
+curl -k -u web-client:web-secret https://localhost:8081/web/cuentas
 
 # bff-movil
-curl.exe -u movil-client:movil-secret http://localhost:8082/movil/cuentas/101
+curl -k -u movil-client:movil-secret https://localhost:8082/movil/cuentas/101
 
 # bff-cajeros (requiere ademas el PIN)
-curl.exe -u cajero-client:cajero-secret -H "X-Pin: 1234" http://localhost:8083/cajero/cuentas/101/saldo
+curl -k -u cajero-client:cajero-secret -H "X-Pin: 1234" https://localhost:8083/cajero/cuentas/101/saldo
 ```
+
+### Pruebas con Insomnia
+
+Es necesario desactivar la validación SSL antes de probar estos endpoints, dado que el certificado no proviene de una CA reconocida por el sistema. En Insomnia: **Preferences → General → desactivar "Validate certificates"** (o el toggle equivalente según la versión).
+
+### Pruebas con Postman
+
+Postman valida certificados SSL por defecto. Para desactivarlo: **Settings (ícono de engranaje) → General → desactivar "SSL certificate verification"**. Alternativamente, puede desactivarse solo para este proyecto agregando la excepción del dominio en **Settings → Certificates**, sin afectar la verificación global de otras colecciones.
 
 ## Integrantes del Grupo 11 (S1, S2 y S4)
 

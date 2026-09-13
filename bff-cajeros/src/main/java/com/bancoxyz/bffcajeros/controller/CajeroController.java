@@ -26,12 +26,17 @@ public class CajeroController {
     }
 
     @PatchMapping("/cuentas/{cuentaId}/retiro")
-    public ResponseEntity<String> retirar(@PathVariable Long cuentaId, @RequestBody RetiroCajeroRequest request) {
+    public ResponseEntity<?> retirar(@PathVariable Long cuentaId, @RequestBody RetiroCajeroRequest request) {
         return coreApiClient.patch()
                 .uri("/api/cuentas/{id}/retiro", cuentaId)
-                .body(new com.bancoxyz.bffcajeros.model.RetiroCajeroRequest(request.monto()))
-                .retrieve()
-                .onStatus(HttpStatusCode::isError, (req, res) -> {})
-                .toEntity(String.class);
+                .body(new RetiroCajeroRequest(request.monto()))
+                .exchange((req, res) -> {
+                    if (res.getStatusCode().isError()) {
+                        String mensaje = new String(res.getBody().readAllBytes());
+                        return ResponseEntity.status(res.getStatusCode()).body(mensaje);
+                    }
+                    CuentaCajeroDTO cuenta = res.bodyTo(CuentaCajeroDTO.class);
+                    return ResponseEntity.ok(cuenta);
+                });
     }
 }
