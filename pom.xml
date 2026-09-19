@@ -14,5 +14,6 @@
         <module>bff-web</module>
         <module>bff-movil</module>
         <module>bff-cajeros</module>
+        <module>service-registry</module>
     </modules>
 </project>
