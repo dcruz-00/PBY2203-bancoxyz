@@ -14,7 +14,8 @@ Es un sistema de procesamiento batch para el BancoXYZ, desarrollado con **Spring
 - [Cómo ejecutar los Jobs](#cómo-ejecutar-los-jobs)
 - [Arquitectura BFF (Backend for Frontend)](#arquitectura-bff-backend-for-frontend)
 - [Cómo ejecutar los BFF](#cómo-ejecutar-los-bff)
-- [Integrantes](#integrantes)
+- [Microservicios en la nube con Spring Cloud (Semana 6)](#microservicios-en-la-nube-con-spring-cloud-semana-6)
+- [Integrantes](#integrantes-del-grupo-11-s1-s2-s4-y-s6)
 
 ## Tecnologías
 
@@ -187,7 +188,9 @@ PBY2203-bancoxyz/
 ├── core-api/ # fuente de verdad: expone los datos vía REST (puerto 8080)
 ├── bff-web/ # BFF para clientes Web (puerto 8081)
 ├── bff-movil/ # BFF para app móvil (puerto 8082)
-└── bff-cajeros/ # BFF para cajeros automáticos (puerto 8083)
+├── bff-cajeros/ # BFF para cajeros automáticos (puerto 8083)
+├── config-server/ # configuración centralizada, Spring Cloud Config (puerto 8888)
+└── service-registry/ # Service Discovery, Eureka Server (puerto 8761)
 
 
 ### Decisión de diseño: microservicios separados en vez de un solo Spring Boot
@@ -233,14 +236,20 @@ Pensado para operaciones críticas: `GET /cajero/cuentas/{id}/saldo` y `PATCH /c
 
 ## Cómo ejecutar los BFF
 
-Se necesitan **4 terminales** en paralelo, una por servicio:
+Se necesitan **PostgreSQL** en marcha y **6 terminales** en paralelo, una por servicio, **en este orden**:
 
 ```bash
-cd core-api    && ../mvnw spring-boot:run   # puerto 8080
-cd bff-web     && ../mvnw spring-boot:run   # puerto 8081
-cd bff-movil   && ../mvnw spring-boot:run   # puerto 8082
-cd bff-cajeros && ../mvnw spring-boot:run   # puerto 8083
+cd config-server    && ../mvnw spring-boot:run   # puerto 8888 (debe ir primero)
+cd core-api         && ../mvnw spring-boot:run   # puerto 8080
+cd service-registry && ../mvnw spring-boot:run   # puerto 8761
+cd bff-web          && ../mvnw spring-boot:run   # puerto 8081
+cd bff-movil        && ../mvnw spring-boot:run   # puerto 8082
+cd bff-cajeros      && ../mvnw spring-boot:run   # puerto 8083
 ```
+
+- `core-api` obtiene su configuración (puerto, base de datos, SSL y clave interna) del Config Server, por lo que **no arranca si el Config Server no está levantado**.
+- El Service Registry debe estar arriba antes que los BFF para que estos se registren al iniciar.
+- `batch-jobs` no es necesario para esta parte: se ejecuta por separado (ver *Cómo ejecutar los Jobs*).
 
 ## Seguridad de transporte: HTTPS
 
@@ -299,7 +308,117 @@ Es necesario desactivar la validación SSL antes de probar estos endpoints, dado
 
 Postman valida certificados SSL por defecto. Para desactivarlo: **Settings (ícono de engranaje) → General → desactivar "SSL certificate verification"**. Alternativamente, puede desactivarse solo para este proyecto agregando la excepción del dominio en **Settings → Certificates**, sin afectar la verificación global de otras colecciones.
 
-## Integrantes del Grupo 11 (S1, S2 y S4)
+## Microservicios en la nube con Spring Cloud (Semana 6)
 
-- **Diego Cruz** — Reporte de Transacciones Diarias, Generación de Estados de Cuenta Anuales, BFF Móvil, BFF Cajeros
-- **Emilia Acevedo** — Cálculo de Intereses Mensuales, `core-api`, BFF Web
+### Objetivo y propuesta técnica
+
+Esta entrega lleva el proyecto a una arquitectura de microservicios preparada para la nube, agregando tres piezas de Spring Cloud sobre los servicios existentes (`core-api` y los 3 BFF):
+
+| Necesidad | Solución | Módulo / componente |
+|---|---|---|
+| Configuración centralizada | Spring Cloud Config Server | `config-server` (puerto 8888) |
+| Descubrimiento de servicios | Netflix Eureka | `service-registry` (puerto 8761) |
+| Tolerancia a fallos | Circuit Breaker de Resilience4j con fallback | `bff-web`, `bff-movil`, `bff-cajeros` |
+| Autenticación y autorización | Spring Security (ya existente, documentada más abajo) | los 3 BFF y `core-api` |
+
+Los módulos de esta entrega que usan Spring Cloud (`config-server`, `service-registry`, `core-api` y los 3 BFF) usan **Spring Boot 4.1.0** y el tren de versiones **Spring Cloud 2025.1.3**, declarado en el `pom.xml` de cada módulo (propiedad `spring-cloud.version`).
+
+```
+ config-server (:8888) ── configuración ──────▶ core-api (:8080)
+                                                ▲
+ bff-web     (:8081) ─┐                         │
+ bff-movil   (:8082) ─┼─ HTTPS + X-Internal-Key ┘
+ bff-cajeros (:8083) ─┘   (Circuit Breaker en cada BFF)
+        │
+        └─ se registran en ─▶ service-registry / Eureka (:8761)
+```
+
+### Configuración centralizada: Config Server
+
+- `config-server` es una aplicación Spring Boot con `spring-cloud-config-server`, anotada con `@EnableConfigServer`, en el puerto **8888**.
+- Funciona en modo `native`: sirve la configuración desde una carpeta local del propio módulo, `config-server/src/main/resources/config-repo/`, en vez de un repositorio Git aparte. Cada microservicio tiene un archivo con el mismo nombre que su `spring.application.name`; hoy existe `core-api.properties`.
+- `core-api` consume esa configuración: agrega la dependencia `spring-cloud-starter-config` y su `application.properties` local quedó reducido a su nombre, a `spring.config.import=configserver:http://localhost:8888` y a una propiedad de compatibilidad de Spring Cloud. Lo que se movió al Config Server: el puerto, la conexión a la base de datos, `internal.api.key` y la configuración SSL.
+- Verificación: `GET http://localhost:8888/core-api/default` devuelve las propiedades, y en el log de arranque de `core-api` aparecen las líneas `Fetching config from server at : http://localhost:8888` y `Located environment: name=core-api, ...`.
+
+### Service Discovery: Eureka
+
+- `service-registry` es una aplicación Spring Boot con `spring-cloud-starter-netflix-eureka-server`, anotada con `@EnableEurekaServer`, en el puerto **8761**. Funciona como servidor único: `eureka.client.register-with-eureka=false` y `eureka.client.fetch-registry=false`.
+- Los 3 BFF se registran como clientes con `spring-cloud-starter-netflix-eureka-client`. Cada uno declara la URL del registry (`eureka.client.service-url.defaultZone=http://localhost:8761/eureka/`) y, como los servicios solo atienden HTTPS, `eureka.instance.secure-port-enabled=true` y `eureka.instance.non-secure-port-enabled=false` (el cliente Eureka no deduce el puerto seguro a partir de `server.ssl.enabled`).
+- Panel: `http://localhost:8761` muestra `BFF-WEB`, `BFF-MOVIL` y `BFF-CAJEROS` en estado UP.
+- El aviso rojo *"EMERGENCY! EUREKA MAY BE INCORRECTLY CLAIMING INSTANCES ARE UP..."* del panel es el modo de auto-preservación de Eureka con pocas instancias registradas; no indica un error.
+- Alcance: los BFF se registran, pero siguen llamando a `core-api` con una URL fija (`https://localhost:8080`); `core-api` no está registrado en Eureka (ver *Limitaciones conocidas*).
+
+### Tolerancia a fallos en los BFF: Circuit Breaker (Resilience4j)
+
+Cada BFF depende de `core-api`. Sin protección, si `core-api` cae, cada petición intentaría llamarlo y fallaría o esperaría en vano. Para evitarlo, los 3 BFF usan el patrón **Circuit Breaker** con **fallback**, mediante `spring-cloud-starter-circuitbreaker-resilience4j`:
+
+- `ResilienceConfig` define el circuito `core-api` y sus parámetros.
+- `RestClientConfig` registra un interceptor (`ClientHttpRequestInterceptor`) que envuelve con el Circuit Breaker el envío de cada petición a `core-api`, tanto los `GET` como el `PATCH` del retiro en `bff-cajeros`. Los controllers no cambian.
+
+| Parámetro | Valor |
+|---|---|
+| Ventana de llamadas evaluadas | 5 |
+| Mínimo de llamadas para evaluar | 3 |
+| Umbral de fallos para abrir el circuito | 50 % |
+| Tiempo en estado abierto | 15 s |
+| Llamadas de prueba en estado semiabierto | 2 |
+| Timeout por llamada | 5 s |
+
+Estos valores están elegidos para poder demostrar el comportamiento; no son valores de producción. Los valores por defecto de Resilience4j (ventana y mínimo de 100 llamadas, 60 s en estado abierto, 1 s de timeout) hacen que el circuito casi nunca llegue a abrirse en una demostración.
+
+**Qué cuenta como fallo:** los errores de conexión y los timeouts (más de 5 s sin respuesta). Las respuestas HTTP de `core-api`, incluidos los 4xx (por ejemplo, "cuenta no existe") y los 5xx, no cuentan como fallo del circuito, porque Spring aplica el manejo de códigos de estado después del interceptor.
+
+**Fallback:** cuando la llamada falla o el circuito está abierto, el interceptor lanza una `ResourceAccessException` y el `RestClientExceptionHandler` de cada BFF la convierte en un **503 Service Unavailable** con uno de estos mensajes:
+
+- `No fue posible comunicarse con core-api: sin respuesta (HttpHostConnectException)`: la llamada se intentó y falló.
+- `No fue posible comunicarse con core-api: circuito abierto, llamada rechazada sin contactar al servicio`: el circuito está abierto y ni siquiera se intentó.
+
+Decisión de diseño: el fallback **no inventa datos** (ni listas vacías ni saldos guardados). En un sistema bancario, una lista vacía es indistinguible de "no hay cuentas" y un saldo desactualizado es peligroso; y en el retiro del cajero nunca se simula un éxito.
+
+**Ciclo del circuito:** cerrado → se abre cuando el porcentaje de fallos supera el umbral → permanece abierto 15 s (respondiendo de inmediato con el fallback) → pasa a semiabierto y deja pasar 2 llamadas de prueba → se cierra si tienen éxito, o vuelve a abrirse si fallan. Con la ventana de 5 llamadas y el mínimo de 3, el circuito se abre tras 2 o 3 fallos, según las llamadas previas registradas en la ventana.
+
+**Cómo probarlo:** detener `core-api` y repetir una petición al BFF. Las primeras respuestas son 503 con `sin respuesta` y luego con `circuito abierto`. Al levantar `core-api` de nuevo y esperar 15 s, las peticiones vuelven a responder 200.
+
+### Autenticación y autorización
+
+Se usa Spring Security con `httpBasic`, como en el ejemplo de seguridad de la guía de la semana, y se protege el sistema en varias capas:
+
+| Capa | Mecanismo | Si falla |
+|---|---|---|
+| Transporte | HTTPS con certificado autofirmado en `core-api` y los 3 BFF (ver *Seguridad de transporte: HTTPS*) | |
+| Autenticación por canal | HTTP Basic en cada BFF, con un usuario en memoria por canal (`web-client`, `movil-client`, `cajero-client`) y contraseñas codificadas con `DelegatingPasswordEncoder` | 401 Unauthorized |
+| Autorización por rol | Cada canal tiene su rol: `WEB` para `/web/**`, `MOVIL` para `/movil/**` y `CAJERO` para `/cajero/**`; el resto de las rutas exige estar autenticado | 401 / 403 |
+| Segundo factor en cajeros | Cabecera `X-Pin` validada por un filtro sobre `/cajero/**` (valor esperado en `atm.pin.esperado`) | 403 con `{"error":"PIN invalido o ausente (X-Pin)"}` |
+| Confianza entre servicios | Los BFF envían automáticamente la cabecera `X-Internal-Key` a `core-api`, que la valida con un filtro; el valor (`internal.api.key`) proviene del Config Server | 401 con `{"error":"Falta o es invalida la clave interna (X-Internal-Key)"}` |
+
+Así, un cliente solo puede llegar a los datos a través del BFF de su canal y con sus credenciales, y `core-api` no puede consumirse directamente sin la clave interna. Las pruebas están en *Evidencia de ejecución* y en *Pruebas con `curl`*.
+
+### Evidencia de ejecución
+
+Las capturas están en el archivo `evidencia_backend_s6.pdf`, incluido en la carpeta de entrega, y se hicieron con Insomnia y con la terminal:
+
+| Qué demuestra | Captura |
+|---|---|
+| Config Server | Log de arranque de `core-api` (`Fetching config from server at : http://localhost:8888`, `Located environment: name=core-api...`, Tomcat en el puerto 8080 con HTTPS) y `GET http://localhost:8888/core-api/default` con 200 |
+| Cada canal responde | 200 en `bff-web`, `bff-movil` y `bff-cajeros` (este último con `X-Pin`) |
+| Autenticación | 401 sin credenciales (`bff-web` y `bff-movil`) y 401 con clave incorrecta (`bff-web`) |
+| Autorización por capas | 403 en cajeros sin PIN y 401 en `core-api` directo sin `X-Internal-Key` |
+| Retiro | 200 con `core-api` arriba (el saldo de la cuenta 101 pasó de 4800 a 4700) y 503 con el circuito abierto |
+| Circuit Breaker | En `bff-web` y `bff-movil`: 503 `sin respuesta` y luego 503 `circuito abierto` |
+| Service Discovery | Panel de Eureka con `BFF-WEB`, `BFF-MOVIL` y `BFF-CAJEROS` en estado UP |
+
+### Limitaciones conocidas
+
+Decisiones y pendientes que se dejan documentados a propósito:
+
+- **Config Server y Service Registry sin HTTPS ni autenticación.** Funcionan por HTTP en `localhost`, y el Config Server entrega en texto plano las contraseñas de la base de datos y del keystore y la clave interna. Esos valores además están versionados en este repositorio público. En un entorno real irían en un repositorio de configuración privado o en un gestor de secretos, y el Config Server estaría protegido.
+- **Discovery parcial.** Los BFF se registran en Eureka, pero siguen llamando a `core-api` con una URL fija; `core-api` no está registrado en Eureka.
+- **Circuit Breaker acotado.** Solo cuentan como fallo los errores de conexión y los timeouts: los 5xx de `core-api` no abren el circuito, y el cliente HTTP no tiene timeouts propios (solo el de 5 s del Circuit Breaker). En el retiro de cajeros, un timeout es ambiguo: la operación pudo haberse aplicado en `core-api` aunque el BFF responda 503.
+- **Formato del error.** El fallback responde con un 503 en texto plano, no con un JSON estructurado.
+- **Autenticación básica.** Los usuarios están en memoria y las credenciales, el PIN y la clave interna se guardan en archivos versionados. No se usan JWT ni OAuth 2.0.
+- **Detalles del panel de Eureka.** Los BFF no exponen actuator, por lo que los enlaces de estado y salud del panel no funcionan, y el identificador de cada instancia incluye la IP de la red local.
+
+## Integrantes del Grupo 11 (S1, S2, S4 y S6)
+
+- **Diego Cruz** — Reporte de Transacciones Diarias, Generación de Estados de Cuenta Anuales, BFF Móvil, BFF Cajeros. S6: Service Registry (Eureka), registro de los 3 BFF en Eureka y Circuit Breaker.
+- **Emilia Acevedo** — Cálculo de Intereses Mensuales, `core-api`, BFF Web. S6: Config Server y conexión de `core-api`.
